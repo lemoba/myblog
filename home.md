@@ -55,6 +55,4 @@
 * [面向对象特性](zh-cn/PHP/面向对象特性)
 * [大话设计模式](zh-cn/PHP/设计模式)
 * [PHP7源码分析](zh-cn/PHP/PHP7源码分析)
-
-* [TP5框架源码分析](zh-cn/PHP/TP5框架源码分析)
 * [PHP面试大全](zh-cn/PHP/PHP面试大全)
