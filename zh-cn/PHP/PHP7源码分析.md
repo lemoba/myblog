@@ -1,8 +1,296 @@
+## PHP7内核分析
+
+### 一、前置知识
+
+#### 1. 结构体和联合体
+
+```c
+// 结构体 8字节对齐
+struct _s {
+  char a;		// 1byte
+  int b;		// 4byte
+  long c;		// 8byte
+  void* d; 	// 8byte
+  int e;		// 4byte
+  char* f 	// 8byte
+}s; 
+
+// 联合体 复用内存
+union _u {
+  char a;		// 1byte
+  int b;		// 4byte
+  long c;		// 8byte
+  void* d; 	// 8byte
+  int e;		// 4byte
+  char* f 	// 8byte
+}u; 
+```
+
+| <img src="../../images/image-20220304194248552.png" alt="image-20220304194248552" style="zoom:25%;" /> | <img src="../../images/image-20220304194427704.png" alt="image-20220304194427704" style="zoom:40%;" /> |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+
+#### 2. 大小端
+
+* 大端：低位存放高地址，高位存放低地址
+* 小端：低位存放低地址，高位存放高地址
+
+<img src="../../images/image-20220304195622356.png" alt="image-20220304195622356" style="zoom:40%;" />
+
+```c
 
 
-## PHP7内核解析
+//bigorlittleendian
 
-### 一、 PHP7的新特性
+#include <stdio.h>
+
+void func1()
+{
+    int i = 0x12345678;
+    if (*((char*)&i) == 0x12) {
+        printf("func1 says Big endian!\n");
+    }else {
+        printf("func1 says Little endian!\n");
+    }
+    return;
+}
+
+void func2()
+{
+    union _u {
+        int i;
+        char c;
+    }u;
+    u.i = 1;
+    if (u.c == 1) {
+        printf("func2 says Little endian!\n");
+    }else {
+        printf("func2 says Big endian!\n");
+    }
+    return;
+}
+
+int main()
+{
+    func1();
+    func2();
+    return 0;
+}
+
+
+[root@w7xadngvydtaorh8-1020609 code]#  gdb ./bigorlittleendian
+GNU gdb (GDB) Red Hat Enterprise Linux 7.6.1-120.el7
+Copyright (C) 2013 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type "show copying"
+and "show warranty" for details.
+This GDB was configured as "x86_64-redhat-linux-gnu".
+For bug reporting instructions, please see:
+<http://www.gnu.org/software/gdb/bugs/>...
+Reading symbols from /root/php/code/bigorlittleendian...done.
+(gdb) b func1
+Breakpoint 1 at 0x400535: file bigorlittleendian.c, line 5.
+(gdb) r
+Starting program: /root/php/code/./bigorlittleendian 
+
+Breakpoint 1, func1 () at bigorlittleendian.c:5
+5           int i = 0x12345678;
+Missing separate debuginfos, use: debuginfo-install glibc-2.17-325.el7_9.x86_64
+(gdb) n
+6           if (*((char*)&i) == 0x12) {
+(gdb) p/x i
+$1 = 0x12345678
+(gdb) x/b &i
+0x7fffffffe37c: 0x78
+(gdb) x/4 &i
+0x7fffffffe37c: 0x78    0x56    0x34    0x12
+(gdb) x/16 &i
+0x7fffffffe37c: 0x78    0x56    0x34    0x12    0x90    0xe3    0xff0xff
+0x7fffffffe384: 0xff    0x7f    0x00    0x00    0x9e    0x05    0x400x00
+```
+
+
+
+#### 3. 宏
+
+> 宏就是原样替换
+
+```c
+#include <stdio.h>
+#define MY_MACRO " a %s\n"
+
+int main()
+{
+  char *m = "macro";
+  printf("This is" MY_MACRO, m); // This is a marcro
+  return 1;
+}
+```
+
+#### 4. String
+
+* **字符串类型**
+
+> 8字节对齐，一共32byte
+
+```c
+struct _zend_string { // 二进制安全
+	zend_refcounted_h gc;
+	zend_ulong        h;                /* hash value */
+	size_t            len;		 			// 保存字符串长度
+	char              val[1]; 			// 柔性数组保存字符串内容
+};
+```
+<img src="../../images/image-20220304203749899.png" alt="image-20220304203749899" style="zoom:30%;" />
+
+| <img src="../../images/image-20220304205240251.png" alt="image-20220304205240251" style="zoom:30%;" /> | <img src="../../images/image-20220304205418581.png" alt="image-20220304205418581" style="zoom:30%;" /> | <img src="../../images/image-20220304205501870.png" alt="image-20220304205501870" style="zoom:30%;" /> |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
+
+
+
+* **写时复制**
+  * 简单类型(整型)： 直接复制
+  * 复杂类型(字符串)：写时复制
+
+```php
+<?php
+
+$a = "string" . date("Y-m-d");
+echo $a; 
+$b = $a; 
+echo b;
+$b = "new string";
+echo $b;
+```
+
+#### 5. Hashtable
+
+| <img src="../../images/image-20220304210221814.png" alt="image-20220304210221814" style="zoom:50%;" /> | <img src="../../images/image-20220304211139172.png" alt="image-20220304211139172" style="zoom:50%;" /> |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+
+
+
+```c
+
+typedef struct _Bucket {
+	zval              val;
+	zend_ulong        h;                /* hash value (or numeric index)   */
+	zend_string      *key;              /* string key or NULL for numerics */
+} Bucket;
+
+typedef struct _zend_array HashTable;
+
+struct _zend_array {
+	zend_refcounted_h gc;
+	union {
+		struct {
+			ZEND_ENDIAN_LOHI_4(
+				zend_uchar    flags,
+				zend_uchar    nApplyCount,
+				zend_uchar    nIteratorsCount,
+				zend_uchar    consistency)
+		} v;
+		uint32_t flags;
+	} u;
+	uint32_t          nTableMask; 				// 计算最终落在哪个桶里面的值
+	Bucket           *arData;							// 存放的bucket
+	uint32_t          nNumUsed;						// 已经使用的个数 包含unset的值
+	uint32_t          nNumOfElements; 		// 真正有意义的值 不包含unset的值 （unset后nNumUsed不会改变而nNumOfElements会减少）
+	uint32_t          nTableSize;					// Bucket大小
+	uint32_t          nInternalPointer;		// 内部指针
+	zend_long         nNextFreeElement;		// 没有key的数组的值的存放的位置
+	dtor_func_t       pDestructor;				// 析构指针
+};
+```
+
+
+
+##### 1) 多出的1M内存空间去哪了？
+
+> Packed Array: 索引数组只需要两个空间，因为packed array下标是递增的，不需要计算hash值
+>
+> Hash Array: 需要维护20万个整型空间。
+
+```php
+// test1.php
+ <?php
+  2 
+  3 $memory_start = memory_get_usage();
+  4 
+  5 $test = [];
+  6 
+  7 for ($i = 0; $i < 2000000; $i++) {
+  8     $test[$i] = 1;
+  9 }
+ 10 
+ 11 echo memory_get_usage() - $memory_start, "bytes\n"; // 67113152bytes
+
+//test2.php
+  1 <?php
+  2 
+  3 $memory_start = memory_get_usage();
+  4 
+  5 $test = [];
+  6 
+  7 for ($i = 2000000; $i > 0; $i--) {
+  8     $test[$i] = 1;
+  9 }
+ 10 
+ 11 echo memory_get_usage() - $memory_start, "bytes\n"; // 75497664bytes
+```
+
+
+
+| <img src="../../images/image-20220304211945958.png" alt="image-20220304211945958" style="zoom:50%;" /> | <img src="../../images/image-20220304212256627.png" alt="image-20220304212256627" style="zoom:50%;" /> |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+
+##### 2) 数组操作实战
+
+```php
+<?php
+
+
+$arr = []; //初始化为Packed Array
+echo $arr;
+
+$arr[] = 'foo'; // 无key赋值
+echo $arr;
+
+$arr[2] = 'abc'; // 数字key赋值
+echo $arr;
+
+$arr['a'] = 'bac'; // 字符串key赋值 //转换为Hash Array 此时0：'foo' 1：'abc'
+echo $arr;
+
+$arr[] = 'xyz'; // 无key赋值
+echo $arr;
+
+$arr['a'] = 'foo'; // 已经存在key赋值
+echo $arr;
+
+echo $arr['a']; // 根据key查找
+unset($arr['a']); // 删除key // 将u1的type设置为0，并不会清除，后序进行rehash
+echo $arr;                                                11,1          All
+```
+
+##### 3) 数组扩容和rehash
+
+> 每次扩容2倍
+
+```php
+<?php
+
+$a = ["foo" => 1, 2, 3, 4, 5, 6, 7, "s" => 2]; 
+echo $a; 
+
+$a[] = 3;
+```
+
+
+
+
+
+### 二、 PHP7的新特性
 
 #### 1. 太空船操作符
 
@@ -114,7 +402,7 @@ $arr = [1, 2, 3];
 
 
 
-### 二、 基本变量与内存管理机制
+### 三、 基本变量与内存管理机制
 
 #### 1. 小而巧的zval
 
@@ -123,24 +411,24 @@ $arr = [1, 2, 3];
 ```c
 struct _zval_struct {		//16byte
    	zend_value value;		//8byte
-    union u1;				//4byte
-    union u2;				//4byte
+    union u1;						//4byte
+    union u2;						//4byte
 }
 
-typedef union _zend_value {				
-	zend_long         lval;				//整型
-	double            dval;				//浮点型
-	zend_refcounted  *counted;			//引用计数
-	zend_string      *str;				//字符串
-	zend_array       *arr;				//数组
-	zend_object      *obj;				//对象
-	zend_resource    *res;				//资源
-	zend_reference   *ref;				//引用
-	zend_ast_ref     *ast;				//抽象语法树
-	zval             *zv;				//指向本身zval
-	void             *ptr;				//其他类型
-	zend_class_entry *ce;				//类
-	zend_function    *func;				//函数
+typedef union _zend_value {
+	zend_long         lval;				// 整型
+	double            dval;				// 浮点型
+	zend_refcounted  *counted;		// 引用计数
+	zend_string      *str;				// 字符串
+	zend_array       *arr;				// 数组
+	zend_object      *obj;				// 对象
+	zend_resource    *res;				// 资源类型
+	zend_reference   *ref;				// 引用类型
+	zend_ast_ref     *ast;				// 抽象语法树
+	zval             *zv;					// 执行本身的zval
+	void             *ptr;				// 指向其他类型
+	zend_class_entry *ce;					// 类 
+	zend_function    *func;				// 函数
 	struct {
 		uint32_t w1;
 		uint32_t w2;
@@ -151,12 +439,27 @@ union {
     struct {
         ZEND_ENDIAN_LOHI_4(
             zend_uchar    type,			/* active type */
-            zend_uchar    type_flags,	//变量类型标记
+            zend_uchar    type_flags,		//变量类型标记
             zend_uchar    const_flags,	//常量类型标记
             zend_uchar    reserved)	    /* call info for EX(This) */
     } v;
     uint32_t type_info;
 } u1;
+
+/*
+type的值
+#define IS_UNDEF					0
+#define IS_NULL						1
+#define IS_FALSE					2
+#define IS_TRUE						3
+#define IS_LONG						4
+#define IS_DOUBLE					5
+#define IS_STRING					6
+#define IS_ARRAY					7
+#define IS_OBJECT					8
+#define IS_RESOURCE					9
+#define IS_REFERENCE				10
+*/
 
 union {
     uint32_t     next;                 /* hash collision chain 解决哈希冲突*/
@@ -194,7 +497,7 @@ echo $h; //FATAL ERROR
 * gdb
 
 ```powershell
-gdb /usr/local/php/php-7.1.0/bin/php
+gdb php
 GNU gdb (GDB) Red Hat Enterprise Linux 7.6.1-120.el7
 Copyright (C) 2013 Free Software Foundation, Inc.
 License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
@@ -204,10 +507,10 @@ and "show warranty" for details.
 This GDB was configured as "x86_64-redhat-linux-gnu".
 For bug reporting instructions, please see:
 <http://www.gnu.org/software/gdb/bugs/>...
-Reading symbols from /usr/local/php/php-7.1.0/bin/php...done.
+Reading symbols from /usr/php/php-7.1.0/bin/php...done.
 
 (gdb) b ZEND_ECHO_SPEC_CV_HANDLER
-Breakpoint 1 at 0x8f5f9a: file /root/code/php-7.1.0/Zend/zend_vm_execute.h, line 34640.
+Breakpoint 1 at 0x8f5f9a: file /root/php/php-7.1.0/Zend/zend_vm_execute.h, line 34640.
 (gdb) r zval.php
 Starting program: /usr/local/php/php-7.1.0/bin/php zval.php
 [Thread debugging using libthread_db enabled]
@@ -245,7 +548,6 @@ $4 = {value = {lval = 4607632778762754458, dval = 1.1000000000000001, counted = 
     ce = 0x3ff199999999999a, func = 0x3ff199999999999a, ww = {w1 = 2576980378, w2 = 1072798105}}, u1 = {v = {type = 5 '\005', type_flags = 0 '\000', 
       const_flags = 0 '\000', reserved = 0 '\000'}, type_info = 5}, u2 = {next = 0, cache_slot = 0, lineno = 0, num_args = 0, fe_pos = 0, fe_iter_idx = 0, 
     access_flags = 0, property_guard = 0}}
-(gdb) ^CQuit
 (gdb) c
 Continuing.
 1.1
@@ -312,7 +614,6 @@ $12 = {value = {lval = 17720896, dval = 8.7552859271255625e-317, counted = 0x10e
     fe_iter_idx = 0, access_flags = 0, property_guard = 0}}
 (gdb) p $12.value.str
 $13 = (zend_string *) 0x10e6640
-(gdb) ^CQuit
 (gdb) p *$12.value.str
 $14 = {gc = {refcount = 1, u = {v = {type = 6 '\006', flags = 7 '\a', gc_info = 0}, type_info = 1798}}, h = 9223378990886268924, len = 6, val = "s"}
 (gdb) p *$12.value.str.val
@@ -840,11 +1141,8 @@ struct _zend_array {
 };
 ```
 
-### 三、 php运行的生命周期
+### 四、 php运行的生命周期
 
+#### 1. CLI模式
 
-
-
-
-
-
+<img src="../../images/image-20220315182229588.png" alt="image-20220315182229588" style="zoom:30%;" />
